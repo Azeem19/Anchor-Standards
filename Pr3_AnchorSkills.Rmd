@@ -1,0 +1,493 @@
+---
+title: "Anchor Skills Project"
+author: "Robert Jackson"
+date: "5/24/2018"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Notes: 
+There are common core standard in the game. I standard per episode. 
+
+There are Anchor standards as well that are key to close reading and improving your writing.
+
+All students starts at moderate with relation to Anchor Standards. You aren’t graded until you get to an “activity”.
+
+After you get to **80%** correct the difficulty increases to **CHALLENGE**
+If a student drops to **70%** the difficulty drops to **SUPPORT**
+* The drop to support is specific to the Anchor standard. 
+* CHALLENGE -  has less clues and the task is a little more complex.
+
+Nicole created an Excel file that tracks the leveling (CHALLENGE, MODERATE, SUPPORT)
+
+*Main interest in these data sets.*
+* Interested in looking at the the Anchor skill trajectory of students through episodes.
+
+* Interested to see how students perform in relations to the teacher activity level within the platform
+    * We could group teacher activity by tiers (get started activities, reporting activities, feedback)
+
+*Note* Ask Nicole, Why they “log into the platform” column is either “0” or “null” for a lot of the educators.
+
+## Part One:
+
+Main Question
+We'll start by looking at student performanc as it relates to Anchor skills.  I first want to figure out the data struture, which means I'll need to figure out some summary statistics as it relates the the "student leveling and task" data.
+
+*Note:* The excel spreadsheet with the "student leveling" data has two tabs one titled: not null, and one titled: null, I believe this is something we asked Nicole to do weeks ago.  Just as a note there are 28,873 null rows, versus the 271,814 rows in the other data-set.  Just to be sure I'll run a missing value analysis before moving forward.  
+
+* not null: 271,814
+* null: 28,873
+* total: 300,687
+
+```{r}
+x <- 28873 + 271814
+x
+```
+
+```{r}
+X<-28873/300687
+X
+```
+Its just under the %10.  I'll run the Litte'sMCar test.
+
+```{r, echo=FALSE, cache.comments=FALSE,message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(root.dir = "/Users/robertjackson/Documents/Classroom_INC./CI_DATA/Project02")
+```
+
+```{r}
+library("BaylorEdPsych")
+library("mvnmle")
+library("dplyr")
+library("ggplot2")
+```
+
+```{r}
+Long_A <-read.csv("StudentLevelingLongform.noNull.csv")
+Long_B <- read.csv("StudentLevelingLongform.null.csv")
+Long_ALL <- rbind(Long_A, Long_B)
+```
+
+```{r}
+# Binding the two data sets, one with no nulls and the one with nulls. Were going to use the MissMech package to determine if the missing data is a systematic issue.  
+# missing1 <- LittleMCAR(Long_ALL)
+
+#e
+#[1] 176052.8
+
+#$df
+#[1] 10
+
+#$p.value
+#[1] 0
+
+#$missing.patterns
+#[1] 2
+
+#$amount.missing
+#                user_id play_iteration_id episode_id standard     instance support_level taskcount task_id
+#Number Missing        0                 0          0        0 2.887200e+04             0         0       0
+#Percent Missing       0                 0          0        0 9.602075e-02             0         0       0
+#                task_description why_important time_completed
+#Number Missing                 0             0              0
+#Percent Missing                0             0              0
+
+#$data
+#$data$DataSet1
+
+#$data$DataSet2
+```
+I ran little's MCAR test and found that the p value is 0 which is good enough to reject the null hypothesis.  While this does not prove the missing data is random, it does support that claim.  I figured as much but its important to confirm.  Moving on to analysis of the main data.  
+
+
+```{r}
+# Defining the function
+my.summary <- function(x, na.rm=TRUE){
+  result <- c(Mean=mean(x, na.rm=na.rm),
+              SD=sd(x, na.rm=na.rm),
+              Median=median(x, na.rm=na.rm),
+              Min=min(x, na.rm=na.rm),
+              Max=max(x, na.rm=na.rm), 
+              N=length(x))
+}
+
+# identifying numeric columns
+ind <- sapply(Long_A, is.numeric)
+
+
+# applying the function to numeric columns only
+sapply(Long_A[, ind], my.summary) 
+
+```
+
+```{r}
+rapply(Long_A,function(x)length(unique(x)))
+```
+
+### SUMMARY STATISTICS TAKEAWAYS
+
+* There are 2021 users
+* Max 12 episodes to play (which makes sense)
+* There are only 3 Unique standards being assesed
+* Instance is the categorical (dummy) variable for the support level
+* There are 304 unique tasks
+* This will be a summary table of the numerical statistics.  It doesn't have any information on the factors data which has some great information as well.  I'll have to create categorical variables that are dummy coded with that data.  
+
+### Things we can look at:
+
+* The time each student commits to completing each episode (tasks)
+* What percentage of students stuggle with which standard
+* Are there any variables that correlate to changes in support levels
+
+### Nice to Ponder: Could we use the variables we have to build out factor analysis/PCA for student profiles?
+
+```{r}
+test <- filter(Long_A, user_id == 10899)
+
+rapply(test,function(x)length(unique(x)))
+
+```
+## The time each student commits to completing each episode (tasks)
+
+* Were first going to look into the amount of time students commit to each episode.
+* Then we'll run some exploratory viz to see trends if possible
+* After that we'll start to look at how students perform and how that changes over time. 
+
+
+I'll build out the variables needed to visualize them.  Things I want clarify:
+
+* How many episodes were completed?
+* How are students shifting in their anchor scores?
+* Which episodes are leading to the shifts in score?
+  * Are those shifts 21st century skill specific?
+```{r}
+#testing whether or not I can count how many episodes students have completed.  Success! Now to add the variable to the larger dataset
+test$Completed <- ifelse(test$task_description == "Complete Episode Decision", 1, 0)
+```
+
+```{r}
+Long_A$Completed <- ifelse(Long_A$task_description == "Complete Episode Decision", 1, 0)
+```
+
+```{r}
+# Time to make an indicator of when a student's anchor skill shifts from main to another support level.  This will a multi-step process:
+
+# 1st - I need to make a variable that counts the differences in an instance against the previous instance.  Meaning when the score of the difference isn't 0 then something has happened.  Since students move between support, main, and challenge just doing a simple if else or counting a different way doesn't allow us to get all changes 
+ 
+# 2nd - Use dyplr to create another variable that actually counts that differnce and indicate that every time diff !=0 i'll have a count for each student ID how many time they changed anchor skill support levels. I'll then have answers to the following questions from above:
+
+# * How are students shifting in their anchor scores?
+# * Which eps/ 21st century skills are being assessed in those score shifts?
+
+```
+
+Test out the steps above.
+
+```{r}
+test2 <-test %>%
+  group_by(user_id, idx = cumsum(instance == "main")) %>%
+  mutate(counter = row_number()) %>%
+  ungroup %>%
+  select(-idx)
+```
+
+```{r}
+test2 <- dplyr::select(test2, user_id, episode_id, standard, instance, support_level, Completed , counter)
+```
+
+```{r}
+test2 <- test2 %>%
+    group_by(user_id) %>%
+    mutate(Diff = counter - lag(counter))
+```
+
+Try it with actual data.  I'll need to see if it actual recognizes the id variable as well and restart the counter.
+
+```{r}
+Long_A <-Long_A %>%
+  group_by(user_id, idx = cumsum(support_level == "main")) %>%
+  mutate(counter = row_number()) %>%
+  ungroup %>%
+  select(-idx)
+```
+
+```{r}
+Long_A2 <- dplyr::select(Long_A, user_id, episode_id, standard, instance, support_level, Completed , counter)
+```
+
+```{r}
+Long_A3 <- Long_A2 %>%
+    group_by(user_id) %>%
+    mutate(Diff = counter - lag(counter))
+```
+
+```{r}
+Long_A3 <- Long_A3 %>%
+  mutate(
+  Challenge = ifelse(
+  support_level == "challenge" & counter == 2,
+  1,
+  ifelse(
+  support_level == "support 1" & counter == 2, -1, 0)
+  ))
+
+# If the challenge column has a 1 this means that a student has moved from "main" to "challenge" on a particular anchor standard. 
+
+# If the challenge column has a -1 this mean that a student ahs moved from "main" to "support" on a particular anchor standard.
+```
+
+```{r}
+# Defining the function
+my.summary <- function(x, na.rm=TRUE){
+  result <- c(Mean=mean(x, na.rm=na.rm),
+              SD=sd(x, na.rm=na.rm),
+              Median=median(x, na.rm=na.rm),
+              Min=min(x, na.rm=na.rm),
+              Max=max(x, na.rm=na.rm), 
+              N=length(x))
+}
+
+# identifying numeric columns
+ind <- sapply(Long_A3, is.numeric)
+
+
+# applying the function to numeric columns only
+sapply(Long_A3[, ind], my.summary) 
+```
+
+```{r}
+Long_Viz <- dplyr::filter(Long_A3, Challenge != 0)
+```
+
+### Summary Statistics
+```{r,echo = FALSE, cache=FALSE, warning=FALSE}
+# Defining the function
+my.summary <- function(x, na.rm=TRUE){
+  result <- c(Mean=mean(x, na.rm=na.rm),
+              SD=sd(x, na.rm=na.rm),
+              Median=median(x, na.rm=na.rm),
+              Min=min(x, na.rm=na.rm),
+              Max=max(x, na.rm=na.rm), 
+              N=length(x))
+}
+
+# identifying numeric columns
+ind <- sapply(Long_Viz, is.numeric)
+
+
+# applying the function to numeric columns only
+sapply(Long_Viz[, ind], my.summary)  
+```
+
+```{r}
+# The majority of student actions are in normal support mode.  This is evident by the histograms below where 0 is magnitudes higher.
+
+ggplot(data = Long_A3) + geom_histogram(mapping = aes(x = Challenge), binwidth = 0.5)
+```
+
+```{r,histogram, echo=FALSE, cache=FALSE, warning=FALSE}
+ggplot(data = Long_Viz, aes(x = Challenge )) + geom_bar(aes(y = ..count..), stat = "count", binwidth = 0.5) 
+
+# Below we'll see that out of the 2117 times a student moved from main to either "support" or "challenge" 
+```
+
+```{r}
+rapply(Long_Viz,function(x)length(unique(x)))
+```
+
+```{r}
+# Below are the standards that had a support level shift.  
+
+with(Long_Viz, table(standard, Challenge))
+```
+
+```{r}
+Long_M <- Long_A %>%
+    group_by(user_id) %>%
+    mutate(Diff = counter - lag(counter))
+```
+
+```{r}
+Long_M <- Long_M %>%
+  mutate(
+  Challenge = ifelse(
+  support_level == "challenge" & counter == 2,
+  1,
+  ifelse(
+  support_level == "support 1" & counter == 2, -1, 0)
+  ))
+```
+
+```{r}
+Long_M<-Long_M %>%
+  group_by(user_id) %>%
+  mutate(count = n_distinct(episode_id))
+
+Long_M<-dplyr::rename(Long_M, Ep_played=count)
+```
+
+```{r}
+ep5 <- dplyr::filter(Long_M, episode_id == 5)
+```
+
+```{r}
+rapply(ep5,function(x)length(unique(x)))
+```
+**To see how many students are either in "support" or "challenge" by episode**
+
+* -1 are the students who are in support.
+*  1 are the students who are in challenge.
+```{r}
+test4 <- Long_M
+
+Long_Chall <- dplyr::filter(Long_M, Challenge != 0)
+
+with(Long_Chall, table(episode_id, Challenge))
+```
+
+```{r}
+Long_M <-Long_M %>%
+  group_by(episode_id) %>%
+  mutate(count = n_distinct(user_id))
+```
+
+**Number of students playing each episode**
+*Open dataframe StudentsWhoPlayed to see how many student have played each episode.*
+```{r}
+# Open dataframe StudentsWhoPlayed to see how many student have played each episode.
+Long_M <- dplyr::select(Long_M, episode_id, count)
+StudentsWhoPlayed <- dplyr::distinct(Long_M)
+
+StudentsWhoPlayed <- dplyr::rename(StudentsWhoPlayed, NumStudents = count)
+```
+
+```{r}
+print(StudentsWhoPlayed)
+```
+
+*ANSWERED: How are students shifting in their anchor scores?*
+
+As evident  by the first histogram above (Lines 287 - 288) majority of student actions are in main.  
+
+As evident by the second histogram above (lines 293 -294) out of the 1194 students who change in support level, majority are moving into support. 
+
+There are 2117 instances where a student moves from main to either "support" or "challenge".  This could be the same student multiple times not that each moment is a new student moving standards.
+
+There are 1194 students who's support level changes out of the 2021 total unique ids. (59% shift in their support level) 
+
+*Overwhelmingly students that shift in their support levels are moving towards "support 1" for CCRA.R.8 & CCRA.R.9. 
+
+*ANSWERED: Which eps/ 21st century skills are being assessed in those score shifts?*
+
+Anchor support level shifts by episode
+
+       Challenge
+episode_id  -1   1
+        1   95  16
+        2   31  34
+        3  340 468
+        4   12  10
+        5  427  71
+        6   56  69
+        7   43  26
+        8  143  20
+        9   33  27
+        10  57  17
+        11  24  21
+        12  55  22
+
+The most students who have a shift in support completed episode 3 there is a balanced split between moving to "support" and moving to "challenge".
+
+Ep. 5 has a large disparity in support level shifts.  There are 497 students who have completed this episode and 86% of students shift to support out of main.   
+
+There is no real connection I can see between anchor skill support change and 21st century skills, but I'll need to dig deeper to confirm. 
+
+*ANSWERED: How many students played each episode*
+episode_id  NumStudents
+
+1	          1805			
+2	          1436			
+3	          1139			
+4	          829			
+5	          673			
+6	          666			
+7	          479			
+8	          498			
+9	          332			
+10	        365	
+11	        284			
+12	        305			
+
+
+## New Notes 12.27.18
+
+I no longer work with classroom inc but I still have access to the data that I downloaded.  I've become increasingly interested in decision trees, association analysis & sequential analysis.  Because we have time series data perhaps I can run analysis on predicting out comes using this data.  
+
+* 1st rewatch video on decision trees, association analysis & sequential analysis
+* 2nd look for papers on each that pertain to education 
+* 3rd attempt to use one to address one question (either generate a new question or look at Hee Jin's list as it pertains to this data)
+
+I want to run the analysis of 
+
+
+TRASH
+```{r}
+A <- Long_A3 %>%
+  mutate(
+  Challenge = ifelse(Diff >= 1 |
+  support_level == "Challenge" | counter == 2,
+  1,
+  ifelse(Diff >= 1 |
+  support_level == "support 1" | counter == 2, 1, 3)
+  ))
+```
+
+```{r}
+Long_A3 <- function(Longa3) {
+  mutate(Long_A3, Challenge = ifeslse(Diff >= 1 & support_level == "Challenge" & counter == 2), 2L,
+         ifelse(Diff >= 1 |support_level == "support 1" | counter == 2), 3L, NA_integer_)
+}
+```
+
+```{r}
+
+```
+
+```{r}
+#Testing to make sure that the Long_M actually counts the number of students who have played the episode.  By isolating those who only played episode 10 and making sure that the user_id matches the "count" in the above.  
+
+test5 <- dplyr::filter(Long_M, episode_id==10)
+rapply(test5,function(x)length(unique(x)))
+```
+
+
+<- function(DF) {
+    mutate(DF, g = ifelse(a %in% c(2,5,7) | (a==1 & b==4), 2L, 
+            ifelse(a %in% c(0,1,3,4) | c==4, 3L, NA_integer_)))
+}
+
+```{r}
+df %>%
+  mutate(g = ifelse(a == 2 | a == 5 | a == 7 | (a == 1 & b == 4), 2,
+               ifelse(a == 0 | a == 1 | a == 4 | a == 3 |  c == 4, 3, NA)))
+```
+
+
+```{r}
+Long_A3$Challenge <- Long_A3[!(Long_A3$Diff >= 1 & Long_A3$support_level == "Challenge" & Long_A3$counter == 2),]
+```
+
+```{r}
+# filter out all the 
+
+
+
+df[!(df$gender == "woman" & df$age > 40 & df$bp = "high"), ]
+```
+
+
+
